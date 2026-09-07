@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+build/
+dist/
+
+# Model weights & large binary data (keep out of VCS)
+checkpoints/
+*.pth
+*.ckpt
+
+# Experiment outputs / caches
+exp/
+outputs/
+metric_cache/
+training_cache/
+
+# Local environment script (contains machine-specific paths)
+env.sh
+
+# Logs & runtime artifacts
+*.log
+nohup.out
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
