@@ -13,6 +13,10 @@ from navsim.common.dataclasses import SceneFilter
 from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
+from navsim.planning.training.callbacks.eta_progress_bar import EtaProgressBar
+from navsim.planning.training.callbacks.keep_recent_checkpoints import KeepRecentCheckpoints
+
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +132,37 @@ def main(cfg: DictConfig) -> None:
     logger.info("Num validation samples: %d", len(val_data))
 
     logger.info("Building Trainer")
-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
+    callbacks = agent.get_training_callbacks()
+    callbacks.append(EtaProgressBar())
+
+    # Save checkpoints every epoch and KEEP THE MOST RECENT 10 (not the
+    # "best" by val/loss, which silently drops later epochs when the metric
+    # degrades). last.ckpt is always written for seamless resume. Default
+    # save dir is ${output_dir}/lightning_logs/version_N/checkpoints/ unless
+    # overridden by the SAVE_ALL_CKPT_DIR env var; KEEP_RECENT_CKPT controls
+    # how many epoch checkpoints to retain.
+    ckpt_dir = os.environ.get("SAVE_ALL_CKPT_DIR", "") or None
+    keep_recent = int(os.environ.get("KEEP_RECENT_CKPT", "10"))
+    model_checkpoint = KeepRecentCheckpoints(
+        dirpath=ckpt_dir,
+        filename="epoch={epoch}-step={step}",
+        save_last=True,
+        every_n_epochs=1,
+        keep_recent=keep_recent,
+    )
+    callbacks.append(model_checkpoint)
+
+    trainer = pl.Trainer(**cfg.trainer.params, callbacks=callbacks)
 
     logger.info("Starting Training")
+    resume_ckpt = cfg.trainer.get("resume_from_checkpoint", None) if "trainer" in cfg else None
+    if resume_ckpt:
+        logger.info(f"Resuming from checkpoint: {resume_ckpt}")
     trainer.fit(
         model=lightning_module,
         train_dataloaders=train_dataloader,
         val_dataloaders=val_dataloader,
+        ckpt_path=resume_ckpt,
     )
 
 
