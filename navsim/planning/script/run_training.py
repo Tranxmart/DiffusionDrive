@@ -137,18 +137,23 @@ def main(cfg: DictConfig) -> None:
 
     # Save checkpoints every epoch and KEEP THE MOST RECENT 10 (not the
     # "best" by val/loss, which silently drops later epochs when the metric
-    # degrades). last.ckpt is always written for seamless resume. Default
-    # save dir is ${output_dir}/lightning_logs/version_N/checkpoints/ unless
-    # overridden by the SAVE_ALL_CKPT_DIR env var; KEEP_RECENT_CKPT controls
-    # how many epoch checkpoints to retain.
+    # degrades). last.ckpt is always written for seamless resume. Checkpoints
+    # at epochs divisible by 10 (e.g. 0, 10, 20, ...) are pinned and kept
+    # forever, so milestone epochs remain available for evaluation.
+    # Default save dir is ${output_dir}/lightning_logs/version_N/checkpoints/
+    # unless overridden by the SAVE_ALL_CKPT_DIR env var; KEEP_RECENT_CKPT
+    # controls how many recent epoch checkpoints to retain and
+    # CKPT_EVERY_KEEP_EPOCHS controls the milestone-epoch divisor (0=off).
     ckpt_dir = os.environ.get("SAVE_ALL_CKPT_DIR", "") or None
     keep_recent = int(os.environ.get("KEEP_RECENT_CKPT", "10"))
+    every_epoch_keep = int(os.environ.get("CKPT_EVERY_KEEP_EPOCHS", "10"))
     model_checkpoint = KeepRecentCheckpoints(
         dirpath=ckpt_dir,
         filename="epoch={epoch}-step={step}",
         save_last=True,
         every_n_epochs=1,
         keep_recent=keep_recent,
+        every_epoch_keep=every_epoch_keep,
     )
     callbacks.append(model_checkpoint)
 
