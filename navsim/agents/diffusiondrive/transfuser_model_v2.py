@@ -9,6 +9,7 @@ from navsim.agents.diffusiondrive.transfuser_features import BoundingBox2DIndex
 from navsim.common.enums import StateSE2Index
 from diffusers.schedulers import DDIMScheduler
 from navsim.agents.diffusiondrive.modules.conditional_unet1d import ConditionalUnet1D,SinusoidalPosEmb
+from navsim.agents.diffusiondrive.modules.precision_compat import BilinearUpsample, bilinear_resize
 import torch.nn.functional as F
 from navsim.agents.diffusiondrive.modules.blocks import linear_relu_ln,bias_init_with_prob, gen_sineembed_for_position, GridSampleCrossBEVAttention
 from navsim.agents.diffusiondrive.modules.multimodal_loss import LossComputer
@@ -58,10 +59,8 @@ class V2TransfuserModel(nn.Module):
                 padding=0,
                 bias=True,
             ),
-            nn.Upsample(
+            BilinearUpsample(
                 size=(config.lidar_resolution_height // 2, config.lidar_resolution_width),
-                mode="bilinear",
-                align_corners=False,
             ),
         )
 
@@ -115,7 +114,7 @@ class V2TransfuserModel(nn.Module):
         concat_cross_bev = keyval[:,:-1].permute(0,2,1).contiguous().view(batch_size, -1, concat_cross_bev_shape[0], concat_cross_bev_shape[1])
         # upsample to the same shape as bev_feature_upscale
 
-        concat_cross_bev = F.interpolate(concat_cross_bev, size=bev_spatial_shape, mode='bilinear', align_corners=False)
+        concat_cross_bev = bilinear_resize(concat_cross_bev, size=bev_spatial_shape)
         # concat concat_cross_bev and cross_bev_feature
         cross_bev_feature = torch.cat([concat_cross_bev, cross_bev_feature], dim=1)
 
