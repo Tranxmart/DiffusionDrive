@@ -13,6 +13,10 @@ from navsim.common.dataclasses import SceneFilter
 from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
+from navsim.planning.training.callbacks.eta_progress_bar import EtaProgressBar
+from navsim.planning.training.callbacks.keep_recent_checkpoints import KeepRecentCheckpoints
+
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +132,42 @@ def main(cfg: DictConfig) -> None:
     logger.info("Num validation samples: %d", len(val_data))
 
     logger.info("Building Trainer")
-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
+    callbacks = agent.get_training_callbacks()
+    callbacks.append(EtaProgressBar())
+
+    # Save checkpoints every epoch and KEEP THE MOST RECENT 10 (not the
+    # "best" by val/loss, which silently drops later epochs when the metric
+    # degrades). last.ckpt is always written for seamless resume. Checkpoints
+    # at epochs divisible by 10 (e.g. 0, 10, 20, ...) are pinned and kept
+    # forever, so milestone epochs remain available for evaluation.
+    # Default save dir is ${output_dir}/lightning_logs/version_N/checkpoints/
+    # unless overridden by the SAVE_ALL_CKPT_DIR env var; KEEP_RECENT_CKPT
+    # controls how many recent epoch checkpoints to retain and
+    # CKPT_EVERY_KEEP_EPOCHS controls the milestone-epoch divisor (0=off).
+    ckpt_dir = os.environ.get("SAVE_ALL_CKPT_DIR", "") or None
+    keep_recent = int(os.environ.get("KEEP_RECENT_CKPT", "10"))
+    every_epoch_keep = int(os.environ.get("CKPT_EVERY_KEEP_EPOCHS", "10"))
+    model_checkpoint = KeepRecentCheckpoints(
+        dirpath=ckpt_dir,
+        filename="epoch={epoch}-step={step}",
+        save_last=True,
+        every_n_epochs=1,
+        keep_recent=keep_recent,
+        every_epoch_keep=every_epoch_keep,
+    )
+    callbacks.append(model_checkpoint)
+
+    trainer = pl.Trainer(**cfg.trainer.params, callbacks=callbacks)
 
     logger.info("Starting Training")
+    resume_ckpt = cfg.trainer.get("resume_from_checkpoint", None) if "trainer" in cfg else None
+    if resume_ckpt:
+        logger.info(f"Resuming from checkpoint: {resume_ckpt}")
     trainer.fit(
         model=lightning_module,
         train_dataloaders=train_dataloader,
         val_dataloaders=val_dataloader,
+        ckpt_path=resume_ckpt,
     )
 
 
