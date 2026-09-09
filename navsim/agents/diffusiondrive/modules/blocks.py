@@ -93,13 +93,24 @@ class GridSampleCrossBEVAttention(nn.Module):
         value = self.value_proj(bev_feature)
         grid = normalized_trajectory.view(bs, num_queries, num_points, 2)
         # Sample features
-        sampled_features = torch.nn.functional.grid_sample(
-            value, 
-            grid, 
-            mode='bilinear', 
-            padding_mode='zeros', 
-            align_corners=False
-        ) # bs, C, num_queries, num_points
+        # NOTE: grid_sample has no BFloat16 kernel on this torch build; run it
+        # in fp32 and cast back (numerically safer than bf16 anyway).
+        if value.dtype == torch.bfloat16:
+            sampled_features = torch.nn.functional.grid_sample(
+                value.float(),
+                grid.float(),
+                mode="bilinear",
+                padding_mode="zeros",
+                align_corners=False,
+            ).to(torch.bfloat16)
+        else:
+            sampled_features = torch.nn.functional.grid_sample(
+                value,
+                grid,
+                mode="bilinear",
+                padding_mode="zeros",
+                align_corners=False,
+            ) # bs, C, num_queries, num_points
 
         attention_weights = attention_weights.unsqueeze(1)
         out = (attention_weights * sampled_features).sum(dim=-1)

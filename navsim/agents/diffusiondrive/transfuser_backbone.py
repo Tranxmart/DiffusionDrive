@@ -4,6 +4,7 @@ Implements the TransFuser vision backbone.
 
 import copy
 import math
+from typing import Tuple
 
 import timm
 import torch
@@ -11,6 +12,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from navsim.agents.diffusiondrive.transfuser_config import TransfuserConfig
+from navsim.agents.diffusiondrive.modules.precision_compat import BilinearUpsample, bilinear_resize
 
 
 class TransfuserBackbone(nn.Module):
@@ -117,17 +119,17 @@ class TransfuserBackbone(nn.Module):
         channel = self.config.bev_features_channels
         self.relu = nn.ReLU(inplace=True)
         # top down
+        # NOTE: bilinear upsampling has no BFloat16 kernel on this torch build;
+        # BilinearUpsample falls back to fp32 internally (see precision_compat).
         if self.config.detect_boxes or self.config.use_bev_semantic:
-            self.upsample = nn.Upsample(
-                scale_factor=self.config.bev_upsample_factor, mode="bilinear", align_corners=False
+            self.upsample = BilinearUpsample(
+                scale_factor=self.config.bev_upsample_factor,
             )
-            self.upsample2 = nn.Upsample(
+            self.upsample2 = BilinearUpsample(
                 size=(
                     self.config.lidar_resolution_height // self.config.bev_down_sample_factor,
                     self.config.lidar_resolution_width // self.config.bev_down_sample_factor,
                 ),
-                mode="bilinear",
-                align_corners=False,
             )
 
             self.up_conv5 = nn.Conv2d(channel, channel, (3, 3), padding=1)
@@ -234,17 +236,13 @@ class TransfuserBackbone(nn.Module):
         image_features_layer, lidar_features_layer = self.transformers[layer_idx](image_embd_layer, lidar_embd_layer)
         lidar_features_layer = self.img_channel_to_lidar[layer_idx](lidar_features_layer)
 
-        image_features_layer = F.interpolate(
+        image_features_layer = bilinear_resize(
             image_features_layer,
             size=(image_features.shape[2], image_features.shape[3]),
-            mode="bilinear",
-            align_corners=False,
         )
-        lidar_features_layer = F.interpolate(
+        lidar_features_layer = bilinear_resize(
             lidar_features_layer,
             size=(lidar_features.shape[2], lidar_features.shape[3]),
-            mode="bilinear",
-            align_corners=False,
         )
 
         image_features = image_features + image_features_layer
