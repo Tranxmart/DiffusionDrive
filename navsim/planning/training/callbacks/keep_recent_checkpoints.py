@@ -40,7 +40,12 @@ class KeepRecentCheckpoints(pl.callbacks.ModelCheckpoint):
         return -1
 
     def _is_pinned(self, p: Path) -> bool:
+        # last.ckpt is always pinned.
         if p.name in ("last.ckpt", "last.ckpt.tmp"):
+            return True
+        # The best-trajectory-epoch checkpoint is owned by
+        # BestTrajectoryCheckpoint and must never be pruned here.
+        if p.name.startswith("best_epoch"):
             return True
         if self.every_epoch_keep and self.every_epoch_keep > 0:
             epoch = self._epoch_of(p)
