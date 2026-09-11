@@ -15,6 +15,7 @@ from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
 from navsim.planning.training.callbacks.eta_progress_bar import EtaProgressBar
 from navsim.planning.training.callbacks.keep_recent_checkpoints import KeepRecentCheckpoints
+from navsim.planning.training.callbacks.best_trajectory_checkpoint import BestTrajectoryCheckpoint
 
 import os
 
@@ -156,6 +157,15 @@ def main(cfg: DictConfig) -> None:
         every_epoch_keep=every_epoch_keep,
     )
     callbacks.append(model_checkpoint)
+
+    # Additionally track the single BEST epoch by val/trajectory_loss (the
+    # metric that tracks planning quality directly; box/BEV losses can degrade
+    # late without hurting trajectory output). Saved as best_epoch_{id}.ckpt
+    # in the same directory; KeepRecentCheckpoints never prunes it. Disable
+    # via BEST_TRAJ_CKPT=0.
+    if os.environ.get("BEST_TRAJ_CKPT", "1") != "0":
+        best_checkpoint = BestTrajectoryCheckpoint(dirpath=ckpt_dir)
+        callbacks.append(best_checkpoint)
 
     trainer = pl.Trainer(**cfg.trainer.params, callbacks=callbacks)
 
