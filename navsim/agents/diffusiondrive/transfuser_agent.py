@@ -87,7 +87,19 @@ class TransfuserAgent(AbstractAgent):
             state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
                 "state_dict"
             ]
-        self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
+        state_dict = {k.replace("agent.", ""): v for k, v in state_dict.items()}
+        # strict=False: checkpoints trained with use_bev_semantic=True carry
+        # _bev_semantic_head weights that no longer exist in the ablated
+        # model (use_bev_semantic=False); they are dropped here instead of
+        # crashing the load. (Weights-only "init" path keeps strict=True
+        # semantics via init_from_pretrained, which already tolerates this.)
+        if not self._config.use_bev_semantic:
+            state_dict = {
+                k: v for k, v in state_dict.items() if not k.startswith("_bev_semantic_head")
+            }
+            self.load_state_dict(state_dict, strict=False)
+        else:
+            self.load_state_dict(state_dict)
 
 
     def get_sensor_config(self) -> SensorConfig:

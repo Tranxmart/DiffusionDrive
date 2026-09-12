@@ -41,28 +41,36 @@ class V2TransfuserModel(nn.Module):
         self._bev_downscale = nn.Conv2d(512, config.tf_d_model, kernel_size=1)
         self._status_encoding = nn.Linear(4 + 2 + 2, config.tf_d_model)
 
-        self._bev_semantic_head = nn.Sequential(
-            nn.Conv2d(
-                config.bev_features_channels,
-                config.bev_features_channels,
-                kernel_size=(3, 3),
-                stride=1,
-                padding=(1, 1),
-                bias=True,
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                config.bev_features_channels,
-                config.num_bev_classes,
-                kernel_size=(1, 1),
-                stride=1,
-                padding=0,
-                bias=True,
-            ),
-            BilinearUpsample(
-                size=(config.lidar_resolution_height // 2, config.lidar_resolution_width),
-            ),
-        )
+        # BEV semantic head is only constructed when the auxiliary task is
+        # enabled; otherwise the parameters do not exist at all (saves
+        # memory/params) and forward() never outputs "bev_semantic_map".
+        if config.use_bev_semantic:
+            self._bev_semantic_head = nn.Sequential(
+                nn.Conv2d(
+                    config.bev_features_channels,
+                    config.bev_features_channels,
+                    kernel_size=(3, 3),
+                    stride=1,
+                    padding=(1, 1),
+                    bias=True,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(
+                    config.bev_features_channels,
+                    config.num_bev_classes,
+                    kernel_size=(1, 1),
+                    stride=1,
+                    padding=0,
+                    bias=True,
+                ),
+                BilinearUpsample(
+                    size=(config.lidar_resolution_height // 2, config.lidar_resolution_width),
+                ),
+            )
+        else:
+            # Keep attribute absent-vs-None semantics: absent attribute means
+            # "head not built". (hasattr check in state_dict compat helper.)
+            self._bev_semantic_head = None
 
         tf_decoder_layer = nn.TransformerDecoderLayer(
             d_model=config.tf_d_model,
@@ -123,10 +131,12 @@ class V2TransfuserModel(nn.Module):
         query = self._query_embedding.weight[None, ...].repeat(batch_size, 1, 1)
         query_out = self._tf_decoder(query, keyval)
 
-        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale)
+        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale) if self._bev_semantic_head is not None else None
         trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
 
-        output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
+        output: Dict[str, torch.Tensor] = (
+            {"bev_semantic_map": bev_semantic_map} if bev_semantic_map is not None else {}
+        )
 
         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
         output.update(trajectory)

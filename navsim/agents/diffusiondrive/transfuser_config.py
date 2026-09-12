@@ -63,7 +63,11 @@ class TransfuserConfig:
     perspective_downsample_factor = 1
     transformer_decoder_join = True
     detect_boxes = True
-    use_bev_semantic = True
+    # BEV semantic auxiliary task disabled by default (ablation): BEV labels
+    # are hard to obtain on custom datasets. Set True to restore the
+    # _bev_semantic_head / bev_semantic_loss path (also re-enables the
+    # bev_semantic_map output key and its weight below).
+    use_bev_semantic = False
     use_semantic = False
     use_depth = False
     add_features = True
