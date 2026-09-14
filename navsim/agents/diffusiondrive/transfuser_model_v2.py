@@ -308,11 +308,15 @@ class CustomTransformerDecoderLayer(nn.Module):
             config=config,
             in_bev_dims=256,
         )
-        self.cross_agent_attention = nn.MultiheadAttention(
-            config.tf_d_model,
-            config.tf_num_head,
-            dropout=config.tf_dropout,
-            batch_first=True,
+        self.cross_agent_attention = (
+            nn.MultiheadAttention(
+                config.tf_d_model,
+                config.tf_num_head,
+                dropout=config.tf_dropout,
+                batch_first=True,
+            )
+            if config.use_agent_queries
+            else None
         )
         self.cross_ego_attention = nn.MultiheadAttention(
             config.tf_d_model,
@@ -346,9 +350,9 @@ class CustomTransformerDecoderLayer(nn.Module):
                 status_encoding,
                 global_img=None):
         traj_feature = self.cross_bev_attention(traj_feature,noisy_traj_points,bev_feature,bev_spatial_shape)
-        # Deep ablation: agents_query is None when use_agent_queries=False;
-        # the agent cross-attention block is skipped entirely.
-        if agents_query is not None:
+        # Deep ablation: cross_agent_attention is not built at all when
+        # use_agent_queries=False (agents_query is always None there).
+        if self.cross_agent_attention is not None and agents_query is not None:
             traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
         traj_feature = self.norm1(traj_feature)
         

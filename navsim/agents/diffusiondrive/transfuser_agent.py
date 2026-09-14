@@ -117,6 +117,10 @@ class TransfuserAgent(AbstractAgent):
             drop_prefixes.append("_bev_semantic_head")
         if not self._config.use_agent_head:
             drop_prefixes.append("_agent_head")
+        # Deep ablation: cross_agent_attention is not built when
+        # use_agent_queries=False, drop its (per-decoder-layer) weights too.
+        if not self._config.use_agent_queries:
+            drop_prefixes.append("cross_agent_attention")
         if drop_prefixes:
             state_dict = {
                 k: v

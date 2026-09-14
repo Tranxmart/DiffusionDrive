@@ -70,21 +70,21 @@ class TransfuserConfig:
     # cross_agent_attention inside the trajectory diff-decoder (context
     # slots), matching the "no box labels on custom dataset" scenario.
     # Set True to restore the head/losses.
-    use_agent_head = True
+    use_agent_head: bool = True
     # DEEP agent ablation: additionally remove the 30 agent query tokens
     # (query_embedding shrinks 31 -> 1) and the cross_agent_attention
     # block inside every diff-decoder layer. Setting this False forces
     # use_agent_head=False (validated in TransfuserAgent). Trajectory
     # decoding then only attends to BEV features + ego query + status.
-    use_agent_queries = True
+    use_agent_queries: bool = True
     # BEV semantic auxiliary task disabled by default (ablation): BEV labels
     # are hard to obtain on custom datasets. Set True to restore the
     # _bev_semantic_head / bev_semantic_loss path (also re-enables the
     # bev_semantic_map output key and its weight below).
-    use_bev_semantic = False
-    use_semantic = False
-    use_depth = False
-    add_features = True
+    use_bev_semantic: bool = False
+    use_semantic: bool = False
+    use_depth: bool = False
+    add_features: bool = True
 
     # Transformer
     tf_d_model: int = 256
