@@ -63,6 +63,14 @@ class TransfuserConfig:
     perspective_downsample_factor = 1
     transformer_decoder_join = True
     detect_boxes = True
+    # Agent-detection auxiliary task gate (ablation). detect_boxes stays True
+    # so the FPN/top_down backbone path is unaffected; this flag only
+    # removes the AgentHead (box/state + label MLPs) and its Hungarian
+    # matching losses. The 30 agent query tokens are KEPT and still feed
+    # cross_agent_attention inside the trajectory diff-decoder (context
+    # slots), matching the "no box labels on custom dataset" scenario.
+    # Set True to restore the head/losses.
+    use_agent_head = True
     # BEV semantic auxiliary task disabled by default (ablation): BEV labels
     # are hard to obtain on custom datasets. Set True to restore the
     # _bev_semantic_head / bev_semantic_loss path (also re-enables the

@@ -81,11 +81,18 @@ class V2TransfuserModel(nn.Module):
         )
 
         self._tf_decoder = nn.TransformerDecoder(tf_decoder_layer, config.tf_num_layers)
-        self._agent_head = AgentHead(
-            num_agents=config.num_bounding_boxes,
-            d_ffn=config.tf_d_ffn,
-            d_model=config.tf_d_model,
-        )
+        # Agent-detection head is optional (use_agent_head). The agent query
+        # tokens themselves are always kept: they feed cross_agent_attention
+        # inside the trajectory diff-decoder. When disabled, "agent_states" /
+        # "agent_labels" are absent from the model output.
+        if config.use_agent_head:
+            self._agent_head = AgentHead(
+                num_agents=config.num_bounding_boxes,
+                d_ffn=config.tf_d_ffn,
+                d_model=config.tf_d_model,
+            )
+        else:
+            self._agent_head = None
 
         self._trajectory_head = TrajectoryHead(
             num_poses=config.trajectory_sampling.num_poses,
@@ -141,8 +148,9 @@ class V2TransfuserModel(nn.Module):
         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
         output.update(trajectory)
 
-        agents = self._agent_head(agents_query)
-        output.update(agents)
+        if self._agent_head is not None:
+            agents = self._agent_head(agents_query)
+            output.update(agents)
 
         return output
 

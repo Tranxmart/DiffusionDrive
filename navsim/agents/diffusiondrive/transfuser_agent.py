@@ -88,14 +88,21 @@ class TransfuserAgent(AbstractAgent):
                 "state_dict"
             ]
         state_dict = {k.replace("agent.", ""): v for k, v in state_dict.items()}
-        # strict=False: checkpoints trained with use_bev_semantic=True carry
-        # _bev_semantic_head weights that no longer exist in the ablated
-        # model (use_bev_semantic=False); they are dropped here instead of
-        # crashing the load. (Weights-only "init" path keeps strict=True
-        # semantics via init_from_pretrained, which already tolerates this.)
+        # strict=False: checkpoints trained with the optional heads enabled
+        # carry weights for them that no longer exist in the ablated model;
+        # they are dropped here instead of crashing the load. (Weights-only
+        # "init" path keeps strict semantics via init_from_pretrained, which
+        # already tolerates this via strict=False.)
+        dropped_prefixes = []
         if not self._config.use_bev_semantic:
+            dropped_prefixes.append("_bev_semantic_head")
+        if not self._config.use_agent_head:
+            dropped_prefixes.append("_agent_head")
+        if dropped_prefixes:
             state_dict = {
-                k: v for k, v in state_dict.items() if not k.startswith("_bev_semantic_head")
+                k: v
+                for k, v in state_dict.items()
+                if not any(k.startswith(p) for p in dropped_prefixes)
             }
             self.load_state_dict(state_dict, strict=False)
         else:
