@@ -26,9 +26,11 @@ class V2TransfuserModel(nn.Module):
 
         super().__init__()
 
+        # Deep ablation: without agent queries the model keeps only the ego
+        # trajectory query (query_embedding 31 -> 1 tokens).
         self._query_splits = [
             1,
-            config.num_bounding_boxes,
+            config.num_bounding_boxes if config.use_agent_queries else 0,
         ]
 
         self._config = config
@@ -82,9 +84,10 @@ class V2TransfuserModel(nn.Module):
 
         self._tf_decoder = nn.TransformerDecoder(tf_decoder_layer, config.tf_num_layers)
         # Agent-detection head is optional (use_agent_head). The agent query
-        # tokens themselves are always kept: they feed cross_agent_attention
-        # inside the trajectory diff-decoder. When disabled, "agent_states" /
-        # "agent_labels" are absent from the model output.
+        # tokens themselves are always kept (unless use_agent_queries=False):
+        # they feed cross_agent_attention inside the trajectory diff-decoder.
+        # When disabled, "agent_states" / "agent_labels" are absent from the
+        # model output.
         if config.use_agent_head:
             self._agent_head = AgentHead(
                 num_agents=config.num_bounding_boxes,
@@ -140,6 +143,10 @@ class V2TransfuserModel(nn.Module):
 
         bev_semantic_map = self._bev_semantic_head(bev_feature_upscale) if self._bev_semantic_head is not None else None
         trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+        # Deep ablation: with 0 agent tokens, agents_query is a 0-length
+        # tensor; pass None down so decoder layers skip the agent attention.
+        if agents_query is not None and agents_query.shape[1] == 0:
+            agents_query = None
 
         output: Dict[str, torch.Tensor] = (
             {"bev_semantic_map": bev_semantic_map} if bev_semantic_map is not None else {}
@@ -148,7 +155,7 @@ class V2TransfuserModel(nn.Module):
         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
         output.update(trajectory)
 
-        if self._agent_head is not None:
+        if self._agent_head is not None and agents_query is not None:
             agents = self._agent_head(agents_query)
             output.update(agents)
 
@@ -339,7 +346,10 @@ class CustomTransformerDecoderLayer(nn.Module):
                 status_encoding,
                 global_img=None):
         traj_feature = self.cross_bev_attention(traj_feature,noisy_traj_points,bev_feature,bev_spatial_shape)
-        traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
+        # Deep ablation: agents_query is None when use_agent_queries=False;
+        # the agent cross-attention block is skipped entirely.
+        if agents_query is not None:
+            traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
         traj_feature = self.norm1(traj_feature)
         
         # traj_feature = traj_feature + self.dropout(self.self_attn(traj_feature, traj_feature, traj_feature)[0])

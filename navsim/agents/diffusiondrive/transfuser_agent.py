@@ -46,6 +46,14 @@ class TransfuserAgent(AbstractAgent):
         """
         super().__init__()
 
+        # Deep ablation dependency: no agent queries implies no agent head.
+        if not config.use_agent_queries and config.use_agent_head:
+            raise ValueError(
+                "use_agent_head=True requires use_agent_queries=True "
+                "(the head consumes the agent query tokens). "
+                "Set use_agent_head=False or use_agent_queries=True."
+            )
+
         self._config = config
         self._lr = lr
 
@@ -65,6 +73,7 @@ class TransfuserAgent(AbstractAgent):
             
             # Remove 'agent.' prefix from keys if present
             state_dict = {k.replace('agent.', ''): v for k, v in state_dict.items()}
+            state_dict = self._filter_optional_components(state_dict)
             
             # Load state dict and get info about missing and unexpected keys
             missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
@@ -88,25 +97,42 @@ class TransfuserAgent(AbstractAgent):
                 "state_dict"
             ]
         state_dict = {k.replace("agent.", ""): v for k, v in state_dict.items()}
-        # strict=False: checkpoints trained with the optional heads enabled
-        # carry weights for them that no longer exist in the ablated model;
-        # they are dropped here instead of crashing the load. (Weights-only
-        # "init" path keeps strict semantics via init_from_pretrained, which
-        # already tolerates this via strict=False.)
-        dropped_prefixes = []
+        state_dict = self._filter_optional_components(state_dict)
+        self.load_state_dict(state_dict)
+
+    def _filter_optional_components(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop weights of optional components that the current config disables.
+
+        Checkpoints trained with the optional heads enabled carry weights
+        that no longer exist in the ablated model; they are removed here so
+        loading never crashes. Also trims ``_transfuser_model._query_embedding``
+        from (1+num_agents, d) to (1, d) when agent queries are removed
+        (deep ablation): token 0 is the ego query, tokens 1..30 the agent
+        queries, so slicing [:1] keeps the ego token.
+        """
+        # Optional-head prefixes appear under the model, possibly behind the
+        # "_transfuser_model." prefix depending on the checkpoint producer.
+        drop_prefixes = []
         if not self._config.use_bev_semantic:
-            dropped_prefixes.append("_bev_semantic_head")
+            drop_prefixes.append("_bev_semantic_head")
         if not self._config.use_agent_head:
-            dropped_prefixes.append("_agent_head")
-        if dropped_prefixes:
+            drop_prefixes.append("_agent_head")
+        if drop_prefixes:
             state_dict = {
                 k: v
                 for k, v in state_dict.items()
-                if not any(k.startswith(p) for p in dropped_prefixes)
+                if not any(p in k for p in drop_prefixes)
             }
-            self.load_state_dict(state_dict, strict=False)
-        else:
-            self.load_state_dict(state_dict)
+        # Deep ablation: shrink query embedding to the ego token only.
+        if not self._config.use_agent_queries:
+            trimmed = {}
+            for k, v in state_dict.items():
+                if k.endswith("_query_embedding.weight") and v.ndim == 2 and v.shape[0] > 1:
+                    trimmed[k] = v[:1].clone()
+                else:
+                    trimmed[k] = v
+            state_dict = trimmed
+        return state_dict
 
 
     def get_sensor_config(self) -> SensorConfig:
