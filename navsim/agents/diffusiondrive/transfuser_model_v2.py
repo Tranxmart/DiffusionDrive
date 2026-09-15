@@ -308,6 +308,10 @@ class CustomTransformerDecoderLayer(nn.Module):
             config=config,
             in_bev_dims=256,
         )
+        # cross_agent_attention is built only when the diff-decoder actually
+        # reads the agent tokens: needs tokens (use_agent_queries) AND the
+        # decoupled-supervision flag. When not built, agents_query stays
+        # unused by this layer (it can still feed AgentHead upstream).
         self.cross_agent_attention = (
             nn.MultiheadAttention(
                 config.tf_d_model,
@@ -315,7 +319,7 @@ class CustomTransformerDecoderLayer(nn.Module):
                 dropout=config.tf_dropout,
                 batch_first=True,
             )
-            if config.use_agent_queries
+            if (config.use_agent_queries and config.use_cross_agent_attention)
             else None
         )
         self.cross_ego_attention = nn.MultiheadAttention(
@@ -350,8 +354,11 @@ class CustomTransformerDecoderLayer(nn.Module):
                 status_encoding,
                 global_img=None):
         traj_feature = self.cross_bev_attention(traj_feature,noisy_traj_points,bev_feature,bev_spatial_shape)
-        # Deep ablation: cross_agent_attention is not built at all when
-        # use_agent_queries=False (agents_query is always None there).
+        # cross_agent_attention is not built when agent queries are off
+        # (deep ablation, agents_query is None) or when
+        # use_cross_agent_attention=False (decoupled supervision). In the
+        # latter case agents_query still exists for AgentHead but is
+        # intentionally NOT read here.
         if self.cross_agent_attention is not None and agents_query is not None:
             traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
         traj_feature = self.norm1(traj_feature)

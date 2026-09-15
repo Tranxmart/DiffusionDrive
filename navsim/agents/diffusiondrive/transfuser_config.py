@@ -77,6 +77,15 @@ class TransfuserConfig:
     # use_agent_head=False (validated in TransfuserAgent). Trajectory
     # decoding then only attends to BEV features + ego query + status.
     use_agent_queries: bool = True
+    # Cross-agent-attention gate (decoupled-supervision ablation): keeps the
+    # agent query tokens AND the AgentHead/losses, but the diff-decoder's
+    # cross_agent_attention is not built, so trajectory decoding never reads
+    # the agent tokens. Detection gradients then only reach the shared
+    # backbone features (no direct path into trajectory decoding).
+    # use_cross_agent_attention=False requires use_agent_queries=True and
+    # use_agent_head=True (validated in TransfuserAgent). Default True keeps
+    # current behaviour.
+    use_cross_agent_attention: bool = True
     # BEV semantic auxiliary task disabled by default (ablation): BEV labels
     # are hard to obtain on custom datasets. Set True to restore the
     # _bev_semantic_head / bev_semantic_loss path (also re-enables the

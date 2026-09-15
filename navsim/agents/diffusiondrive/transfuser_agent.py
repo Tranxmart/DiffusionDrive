@@ -53,6 +53,18 @@ class TransfuserAgent(AbstractAgent):
                 "(the head consumes the agent query tokens). "
                 "Set use_agent_head=False or use_agent_queries=True."
             )
+        # Decoupled-supervision dependency: disabling cross-agent-attention
+        # only makes sense with tokens AND the detection head present
+        # (otherwise use_agent_queries=False already covers it).
+        if not config.use_cross_agent_attention and (
+            not config.use_agent_queries or not config.use_agent_head
+        ):
+            raise ValueError(
+                "use_cross_agent_attention=False is a decoupled-supervision "
+                "ablation and requires use_agent_queries=True AND "
+                "use_agent_head=True. For removing everything use "
+                "use_agent_queries=False instead."
+            )
 
         self._config = config
         self._lr = lr
@@ -118,8 +130,9 @@ class TransfuserAgent(AbstractAgent):
         if not self._config.use_agent_head:
             drop_prefixes.append("_agent_head")
         # Deep ablation: cross_agent_attention is not built when
-        # use_agent_queries=False, drop its (per-decoder-layer) weights too.
-        if not self._config.use_agent_queries:
+        # use_agent_queries=False or use_cross_agent_attention=False; drop
+        # its (per-decoder-layer) weights in either case.
+        if not self._config.use_agent_queries or not self._config.use_cross_agent_attention:
             drop_prefixes.append("cross_agent_attention")
         if drop_prefixes:
             state_dict = {
