@@ -23,10 +23,22 @@ def transfuser_loss(
         trajectory_loss = predictions["trajectory_loss"]
     else:
         trajectory_loss = F.l1_loss(predictions["trajectory"], targets["trajectory"])
-    agent_class_loss, agent_box_loss = _agent_loss(targets, predictions, config)
-    bev_semantic_loss = F.cross_entropy(
-        predictions["bev_semantic_map"], targets["bev_semantic_map"].long()
-    )
+    # Agent-detection losses are gated on the model output keys (which only
+    # exist when use_agent_head=True), so cached targets that still carry
+    # "agent_states" / "agent_labels" remain loadable without the head.
+    if "agent_states" in predictions:
+        agent_class_loss, agent_box_loss = _agent_loss(targets, predictions, config)
+    else:
+        agent_class_loss, agent_box_loss = 0, 0
+    # BEV semantic auxiliary loss is gated on the model output key (which
+    # only exists when use_bev_semantic=True), so cached targets that still
+    # carry "bev_semantic_map" remain loadable without the head.
+    if "bev_semantic_map" in predictions:
+        bev_semantic_loss = F.cross_entropy(
+            predictions["bev_semantic_map"], targets["bev_semantic_map"].long()
+        )
+    else:
+        bev_semantic_loss = 0
     if 'diffusion_loss' in predictions:
         diffusion_loss = predictions['diffusion_loss']
     else:
@@ -42,9 +54,14 @@ def transfuser_loss(
         'loss': loss,
         'trajectory_loss': config.trajectory_weight*trajectory_loss,
         'diffusion_loss': config.diff_loss_weight*diffusion_loss,
-        'agent_class_loss': config.agent_class_weight*agent_class_loss,
-        'agent_box_loss': config.agent_box_weight*agent_box_loss,
+        # Log None instead of a fake 0 when a head is disabled, so the
+        # TensorBoard tag simply disappears rather than misleadingly reading 0.
+        'agent_class_loss': config.agent_class_weight*agent_class_loss
+            if "agent_states" in predictions else None,
+        'agent_box_loss': config.agent_box_weight*agent_box_loss
+            if "agent_states" in predictions else None,
         'bev_semantic_loss': config.bev_semantic_weight*bev_semantic_loss
+            if "bev_semantic_map" in predictions else None,
     }
     if "trajectory_loss_dict" in predictions:
         trajectory_loss_dict = predictions["trajectory_loss_dict"]

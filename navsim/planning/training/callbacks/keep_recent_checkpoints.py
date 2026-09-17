@@ -13,20 +13,17 @@ class KeepRecentCheckpoints(pl.callbacks.ModelCheckpoint):
     degrades), this callback saves every epoch and deletes the oldest files
     once more than `keep_recent` epoch checkpoints exist in the directory.
 
-    Additionally, checkpoints at epochs divisible by `every_epoch_keep` are
-    pinned and never deleted, so milestone epochs (e.g. 0, 10, 20, ...) are
-    always available for comparison/evaluation. `last.ckpt` is never deleted.
+    `last.ckpt` (seamless resume) and `best_epoch_*.ckpt` (owned by
+    BestTrajectoryCheckpoint) are never deleted.
     """
 
     def __init__(
         self,
         keep_recent: int = 10,
-        every_epoch_keep: int = 0,
         **kwargs: Any,
     ) -> None:
         super().__init__(save_top_k=-1, **kwargs)
         self.keep_recent = keep_recent
-        self.every_epoch_keep = every_epoch_keep
 
     @staticmethod
     def _epoch_of(p: Path) -> int:
@@ -47,10 +44,6 @@ class KeepRecentCheckpoints(pl.callbacks.ModelCheckpoint):
         # BestTrajectoryCheckpoint and must never be pruned here.
         if p.name.startswith("best_epoch"):
             return True
-        if self.every_epoch_keep and self.every_epoch_keep > 0:
-            epoch = self._epoch_of(p)
-            if epoch >= 0 and epoch % self.every_epoch_keep == 0:
-                return True
         return False
 
     def _remove_oldest(self, trainer: "pl.Trainer") -> None:

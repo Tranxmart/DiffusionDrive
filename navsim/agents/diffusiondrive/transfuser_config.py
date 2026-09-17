@@ -63,10 +63,37 @@ class TransfuserConfig:
     perspective_downsample_factor = 1
     transformer_decoder_join = True
     detect_boxes = True
-    use_bev_semantic = True
-    use_semantic = False
-    use_depth = False
-    add_features = True
+    # Agent-detection auxiliary task gate (ablation). detect_boxes stays True
+    # so the FPN/top_down backbone path is unaffected; this flag only
+    # removes the AgentHead (box/state + label MLPs) and its Hungarian
+    # matching losses. The 30 agent query tokens are KEPT and still feed
+    # cross_agent_attention inside the trajectory diff-decoder (context
+    # slots), matching the "no box labels on custom dataset" scenario.
+    # Set True to restore the head/losses.
+    use_agent_head: bool = True
+    # DEEP agent ablation: additionally remove the 30 agent query tokens
+    # (query_embedding shrinks 31 -> 1) and the cross_agent_attention
+    # block inside every diff-decoder layer. Setting this False forces
+    # use_agent_head=False (validated in TransfuserAgent). Trajectory
+    # decoding then only attends to BEV features + ego query + status.
+    use_agent_queries: bool = True
+    # Cross-agent-attention gate (decoupled-supervision ablation): keeps the
+    # agent query tokens AND the AgentHead/losses, but the diff-decoder's
+    # cross_agent_attention is not built, so trajectory decoding never reads
+    # the agent tokens. Detection gradients then only reach the shared
+    # backbone features (no direct path into trajectory decoding).
+    # use_cross_agent_attention=False requires use_agent_queries=True and
+    # use_agent_head=True (validated in TransfuserAgent). Default True keeps
+    # current behaviour.
+    use_cross_agent_attention: bool = True
+    # BEV semantic auxiliary task disabled by default (ablation): BEV labels
+    # are hard to obtain on custom datasets. Set True to restore the
+    # _bev_semantic_head / bev_semantic_loss path (also re-enables the
+    # bev_semantic_map output key and its weight below).
+    use_bev_semantic: bool = False
+    use_semantic: bool = False
+    use_depth: bool = False
+    add_features: bool = True
 
     # Transformer
     tf_d_model: int = 256

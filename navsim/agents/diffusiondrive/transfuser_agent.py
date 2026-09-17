@@ -46,6 +46,26 @@ class TransfuserAgent(AbstractAgent):
         """
         super().__init__()
 
+        # Deep ablation dependency: no agent queries implies no agent head.
+        if not config.use_agent_queries and config.use_agent_head:
+            raise ValueError(
+                "use_agent_head=True requires use_agent_queries=True "
+                "(the head consumes the agent query tokens). "
+                "Set use_agent_head=False or use_agent_queries=True."
+            )
+        # Decoupled-supervision dependency: disabling cross-agent-attention
+        # only makes sense with tokens AND the detection head present
+        # (otherwise use_agent_queries=False already covers it).
+        if not config.use_cross_agent_attention and (
+            not config.use_agent_queries or not config.use_agent_head
+        ):
+            raise ValueError(
+                "use_cross_agent_attention=False is a decoupled-supervision "
+                "ablation and requires use_agent_queries=True AND "
+                "use_agent_head=True. For removing everything use "
+                "use_agent_queries=False instead."
+            )
+
         self._config = config
         self._lr = lr
 
@@ -65,6 +85,7 @@ class TransfuserAgent(AbstractAgent):
             
             # Remove 'agent.' prefix from keys if present
             state_dict = {k.replace('agent.', ''): v for k, v in state_dict.items()}
+            state_dict = self._filter_optional_components(state_dict)
             
             # Load state dict and get info about missing and unexpected keys
             missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
@@ -87,7 +108,48 @@ class TransfuserAgent(AbstractAgent):
             state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
                 "state_dict"
             ]
-        self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
+        state_dict = {k.replace("agent.", ""): v for k, v in state_dict.items()}
+        state_dict = self._filter_optional_components(state_dict)
+        self.load_state_dict(state_dict)
+
+    def _filter_optional_components(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop weights of optional components that the current config disables.
+
+        Checkpoints trained with the optional heads enabled carry weights
+        that no longer exist in the ablated model; they are removed here so
+        loading never crashes. Also trims ``_transfuser_model._query_embedding``
+        from (1+num_agents, d) to (1, d) when agent queries are removed
+        (deep ablation): token 0 is the ego query, tokens 1..30 the agent
+        queries, so slicing [:1] keeps the ego token.
+        """
+        # Optional-head prefixes appear under the model, possibly behind the
+        # "_transfuser_model." prefix depending on the checkpoint producer.
+        drop_prefixes = []
+        if not self._config.use_bev_semantic:
+            drop_prefixes.append("_bev_semantic_head")
+        if not self._config.use_agent_head:
+            drop_prefixes.append("_agent_head")
+        # Deep ablation: cross_agent_attention is not built when
+        # use_agent_queries=False or use_cross_agent_attention=False; drop
+        # its (per-decoder-layer) weights in either case.
+        if not self._config.use_agent_queries or not self._config.use_cross_agent_attention:
+            drop_prefixes.append("cross_agent_attention")
+        if drop_prefixes:
+            state_dict = {
+                k: v
+                for k, v in state_dict.items()
+                if not any(p in k for p in drop_prefixes)
+            }
+        # Deep ablation: shrink query embedding to the ego token only.
+        if not self._config.use_agent_queries:
+            trimmed = {}
+            for k, v in state_dict.items():
+                if k.endswith("_query_embedding.weight") and v.ndim == 2 and v.shape[0] > 1:
+                    trimmed[k] = v[:1].clone()
+                else:
+                    trimmed[k] = v
+            state_dict = trimmed
+        return state_dict
 
 
     def get_sensor_config(self) -> SensorConfig:

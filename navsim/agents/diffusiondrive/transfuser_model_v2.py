@@ -26,9 +26,11 @@ class V2TransfuserModel(nn.Module):
 
         super().__init__()
 
+        # Deep ablation: without agent queries the model keeps only the ego
+        # trajectory query (query_embedding 31 -> 1 tokens).
         self._query_splits = [
             1,
-            config.num_bounding_boxes,
+            config.num_bounding_boxes if config.use_agent_queries else 0,
         ]
 
         self._config = config
@@ -41,28 +43,36 @@ class V2TransfuserModel(nn.Module):
         self._bev_downscale = nn.Conv2d(512, config.tf_d_model, kernel_size=1)
         self._status_encoding = nn.Linear(4 + 2 + 2, config.tf_d_model)
 
-        self._bev_semantic_head = nn.Sequential(
-            nn.Conv2d(
-                config.bev_features_channels,
-                config.bev_features_channels,
-                kernel_size=(3, 3),
-                stride=1,
-                padding=(1, 1),
-                bias=True,
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                config.bev_features_channels,
-                config.num_bev_classes,
-                kernel_size=(1, 1),
-                stride=1,
-                padding=0,
-                bias=True,
-            ),
-            BilinearUpsample(
-                size=(config.lidar_resolution_height // 2, config.lidar_resolution_width),
-            ),
-        )
+        # BEV semantic head is only constructed when the auxiliary task is
+        # enabled; otherwise the parameters do not exist at all (saves
+        # memory/params) and forward() never outputs "bev_semantic_map".
+        if config.use_bev_semantic:
+            self._bev_semantic_head = nn.Sequential(
+                nn.Conv2d(
+                    config.bev_features_channels,
+                    config.bev_features_channels,
+                    kernel_size=(3, 3),
+                    stride=1,
+                    padding=(1, 1),
+                    bias=True,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(
+                    config.bev_features_channels,
+                    config.num_bev_classes,
+                    kernel_size=(1, 1),
+                    stride=1,
+                    padding=0,
+                    bias=True,
+                ),
+                BilinearUpsample(
+                    size=(config.lidar_resolution_height // 2, config.lidar_resolution_width),
+                ),
+            )
+        else:
+            # Keep attribute absent-vs-None semantics: absent attribute means
+            # "head not built". (hasattr check in state_dict compat helper.)
+            self._bev_semantic_head = None
 
         tf_decoder_layer = nn.TransformerDecoderLayer(
             d_model=config.tf_d_model,
@@ -73,11 +83,19 @@ class V2TransfuserModel(nn.Module):
         )
 
         self._tf_decoder = nn.TransformerDecoder(tf_decoder_layer, config.tf_num_layers)
-        self._agent_head = AgentHead(
-            num_agents=config.num_bounding_boxes,
-            d_ffn=config.tf_d_ffn,
-            d_model=config.tf_d_model,
-        )
+        # Agent-detection head is optional (use_agent_head). The agent query
+        # tokens themselves are always kept (unless use_agent_queries=False):
+        # they feed cross_agent_attention inside the trajectory diff-decoder.
+        # When disabled, "agent_states" / "agent_labels" are absent from the
+        # model output.
+        if config.use_agent_head:
+            self._agent_head = AgentHead(
+                num_agents=config.num_bounding_boxes,
+                d_ffn=config.tf_d_ffn,
+                d_model=config.tf_d_model,
+            )
+        else:
+            self._agent_head = None
 
         self._trajectory_head = TrajectoryHead(
             num_poses=config.trajectory_sampling.num_poses,
@@ -123,16 +141,23 @@ class V2TransfuserModel(nn.Module):
         query = self._query_embedding.weight[None, ...].repeat(batch_size, 1, 1)
         query_out = self._tf_decoder(query, keyval)
 
-        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale)
+        bev_semantic_map = self._bev_semantic_head(bev_feature_upscale) if self._bev_semantic_head is not None else None
         trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+        # Deep ablation: with 0 agent tokens, agents_query is a 0-length
+        # tensor; pass None down so decoder layers skip the agent attention.
+        if agents_query is not None and agents_query.shape[1] == 0:
+            agents_query = None
 
-        output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
+        output: Dict[str, torch.Tensor] = (
+            {"bev_semantic_map": bev_semantic_map} if bev_semantic_map is not None else {}
+        )
 
         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
         output.update(trajectory)
 
-        agents = self._agent_head(agents_query)
-        output.update(agents)
+        if self._agent_head is not None and agents_query is not None:
+            agents = self._agent_head(agents_query)
+            output.update(agents)
 
         return output
 
@@ -283,11 +308,19 @@ class CustomTransformerDecoderLayer(nn.Module):
             config=config,
             in_bev_dims=256,
         )
-        self.cross_agent_attention = nn.MultiheadAttention(
-            config.tf_d_model,
-            config.tf_num_head,
-            dropout=config.tf_dropout,
-            batch_first=True,
+        # cross_agent_attention is built only when the diff-decoder actually
+        # reads the agent tokens: needs tokens (use_agent_queries) AND the
+        # decoupled-supervision flag. When not built, agents_query stays
+        # unused by this layer (it can still feed AgentHead upstream).
+        self.cross_agent_attention = (
+            nn.MultiheadAttention(
+                config.tf_d_model,
+                config.tf_num_head,
+                dropout=config.tf_dropout,
+                batch_first=True,
+            )
+            if (config.use_agent_queries and config.use_cross_agent_attention)
+            else None
         )
         self.cross_ego_attention = nn.MultiheadAttention(
             config.tf_d_model,
@@ -321,7 +354,13 @@ class CustomTransformerDecoderLayer(nn.Module):
                 status_encoding,
                 global_img=None):
         traj_feature = self.cross_bev_attention(traj_feature,noisy_traj_points,bev_feature,bev_spatial_shape)
-        traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
+        # cross_agent_attention is not built when agent queries are off
+        # (deep ablation, agents_query is None) or when
+        # use_cross_agent_attention=False (decoupled supervision). In the
+        # latter case agents_query still exists for AgentHead but is
+        # intentionally NOT read here.
+        if self.cross_agent_attention is not None and agents_query is not None:
+            traj_feature = traj_feature + self.dropout(self.cross_agent_attention(traj_feature, agents_query,agents_query)[0])
         traj_feature = self.norm1(traj_feature)
         
         # traj_feature = traj_feature + self.dropout(self.self_attn(traj_feature, traj_feature, traj_feature)[0])
